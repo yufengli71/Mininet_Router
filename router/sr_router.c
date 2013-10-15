@@ -194,6 +194,7 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 		icmp_hdr = (sr_icmp_hdr_t *)(reply_packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 		icmp_hdr->icmp_type = htons(type);
 		icmp_hdr->icmp_code = htons(code);
+		icmp_hdr->icmp_sum = htons(0);
 		icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_hdr_t));
 		
 		/* grab the size of ICMP header */
@@ -219,6 +220,7 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 			icmp_hdr->next_mtu = htons(1500);
 		}
 		memcpy(icmp_hdr->data, received_ip_hdr, ICMP_DATA_SIZE);
+		icmp_hdr->icmp_sum = htons(0);
 		icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t3_hdr_t));
 		
 		/* grab the size of ICMP header */
@@ -242,6 +244,7 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 	ip_hdr->ip_p = hotns(ip_protocol_icmp);						/* protocol */
 	ip_hdr->ip_src = htonl(iface->ip);							/* source ip address */
 	ip_hdr->ip_dst = received_ip_hdr->ip_src;					/* dest ip address */
+	ip_hdr->ip_sum = htons(0);
 	ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));		/* checksum */
 	
 	/* construct ethernet header */
@@ -263,6 +266,11 @@ void sr_handleip(struct sr_instance* sr,
 	struct sr_if *iface = 0;
 	sr_icmp_hdr_t *icmp_hdr = 0;
 	uint8_t *reply_packet = 0;
+	struct sr_rt *rt = 0;
+	uint32_t nexthop_ip, longest_mask = 0;
+	struct sr_arpentry *arp_entry = 0;
+	struct sr_arpreq *arp_rep = 0;
+	sr_ethernet_hdr_t *ether_hdr = 0;
 	
 	/* check if header has the correct size */
 	if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) {
@@ -318,20 +326,115 @@ void sr_handleip(struct sr_instance* sr,
 					fprintf(stderr, "Error: sending packet failed (sr_handleip)\n");
 				}
 				
+				free(reply_packet);				
 			}
 		}
 		/* if it contains a TCP or UDP payload */
 		else {
+		
+			/* generate Destination net unreachable (type 3, code 0) reply packet */
+			if ((reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packet, ip_hdr, iface, 3, 3)) == 0) {
+				fprintf(stderr, "Error: failed to generate ICMP packet\n");
+				return;
+			}
 			
+			/* send an ICMP */
+			if (sr_send_packet(sr, reply_packet, sizeof(reply_packet), (const char*)interface) == -1) {
+				fprintf(stderr, "Error: sending packet failed (sr_handleip)\n");
+			}
+			
+			free(reply_packet);		
 		}
 	}
 	/* packet not for us, forward it */
 	else {
 		
+		/* if TTL reaches 0 */
+		if (ip_hdr->ip_ttl <= htons(1)) {
+		
+			/* generate Time exceeded (type 11, code 0) reply packet */
+			if ((reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packet, ip_hdr, iface, 11, 0)) == 0) {
+				fprintf(stderr, "Error: failed to generate ICMP packet\n");
+				return;
+			}
+			
+			/* send an ICMP */
+			if (sr_send_packet(sr, reply_packet, sizeof(reply_packet), (const char*)interface) == -1) {
+				fprintf(stderr, "Error: sending packet failed (sr_handleip)\n");
+			}
+			
+			free(reply_packet);
+		}
+		/* if packet has enough TTL */
+		else {
+			
+			/* decrement the TTL by 1 */
+			ip_hdr->ip_ttl --;
+			
+			/* recompute the packet checksum */
+			ip_hdr->ip_sum = htons(0);
+			ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+			
+			/* Find entry in the routing table with the longest prefix match */
+			rt = sr->routing_table;
+			while (rt != NULL) {
+				
+				/* update the gateway ip and the longest mask so far */
+				if ((rt->dest.s_addr & rt->mask.s_addr) == (ntohl(ip_hdr->ip_dst) & rt->mask.s_addr) &&
+					rt->mask.s_addr > longest_mask) {
+					nexthop_ip = rt->gw.s_addr;
+					longest_mask = rt->mask.s_addr;
+				}
+				
+				rt = rt->next;
+			}
+			
+			/* if a matching routing table entry was NOT found */
+			if (nexthop_ip == 0) {
+				
+				/* generate Destination net unreachable (type 3, code 0) reply packet */
+				if ((reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packet, ip_hdr, iface, 3, 0)) == 0) {
+					fprintf(stderr, "Error: failed to generate ICMP packet\n");
+					return;
+				}
+				
+				/* send an ICMP */
+				if (sr_send_packet(sr, reply_packet, sizeof(reply_packet), (const char*)interface) == -1) {
+					fprintf(stderr, "Error: sending packet failed (sr_handleip)\n");
+				}
+				
+				free(reply_packet);
+			}
+			/* if a matching routing table entry was found */
+			else {
+			
+				/* set the source MAC of ethernet header */
+				ether_hdr = (sr_ethernet_hdr_t*)packet;
+				ether_hdr->ether_shost = htons(iface->addr);
+				
+				/* if the next-hop IP CANNOT be found in ARP cache */
+				if ((arp_entry = sr_arpcache_lookup(&(sr->cache), htonl(nexthop_ip))) == NULL) {
+					
+					/* send an ARP request */
+					arp_req = arpcache_queuereq(nexthop_ip, packet, len);
+					handle_arpreq(arp_req, sr);
+				}
+				/* if the next-hop IP can be found in ARP cache */
+				else {
+					
+					/* set the destination MAC of ethernet header */
+					ether_hdr->ether_dhost = htons(arp_entry->mac);
+					
+					/* send the packet */
+					if (sr_send_packet(sr, packet, sizeof(packet), (const char*)interface) == -1) {
+						fprintf(stderr, "Error: sending packet failed (sr_handlearp)\n");
+					}
+					
+					free(arp_entry);
+				}
+			}
+		}
 	}
-	
-	/* decrement the TTL by 1 */
-	
 }
 
 /*---------------------------------------------------------------------
@@ -371,6 +474,7 @@ void sr_handlepacket(struct sr_instance* sr,
   }
   
   switch (ethertype(packet)) {
+  
 	/* -------------       Handling ARP     -------------------- */
 	case ethertype_arp:
 		sr_handlearp(sr, packet, len, interface);
@@ -382,7 +486,7 @@ void sr_handlepacket(struct sr_instance* sr,
 		break;
 
 	default:
-		fprintf(stderr, "Unknown ether_type: %d\n", ether_type);
+		fprintf(stderr, "Unknown ether_type: %d\n", ethertype(packet));
 		break;
 
   }/* -- switch -- */
