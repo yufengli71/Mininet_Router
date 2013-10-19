@@ -18,8 +18,89 @@
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
     /* Fill this in */
+    struct sr_arpreq *cur = sr->cache.requests;
+    while(cur) {
+		struct sr_arpreq *next = cur.next;
+		handle_arpreq(sr, &cur);
+		cur = next;
+	}
 }
 
+void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
+	time_t now = time(NULL);
+	if(difftime(now, req->sent) > 1.0) {
+		if(req->times_sent >= 5) {
+			// send icmp host unreachable to source addr of all pkts waiting on this request
+			
+			struct sr_packet *packets = req->packets;
+			
+			while(packets) {
+				uint8_t *reply_packet = 0;
+				reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packets->buf, req->ip, packets->iface, 3, 3))
+				if(reply_packet == 0) {
+					fprintf(stderr, "Error: failed to generate ICMP packet\n");
+				}
+				
+				if(sr_send_packet(sr, reply_packet, sizeof(reply_packet), packets->iface) == -1) {
+					fprintf(stderr, "Error: sending packet failed (handle_arpreq)");
+				}
+				packets = packets->next;
+				free(reply_packet);
+			}
+            arpreq_destroy(req);
+		} else {
+			// send ARP request
+			
+			// generate ARP packet
+			struct sr_if iface = 0;
+			
+			if((iface = sr_get_interface(sr, req->packets->iface)) == 0) {
+				fprintf(stderr, "Error: interface does not exist (handle_arpreq)");
+				return;
+			}
+			
+			uint8_t *arp_pkt = sr_new_arpreq_packet(NULL, iface->addr, req->ip, iface->ip);
+			if (sr_send_packet(sr, arp_pkt, sizeof(arp_pkt), (const char*)iface) {
+				fprintf(stderr, "Error: sending packet failed.");
+			}
+			req->times_sent++;
+			req->sent = now;
+			
+			free(arp_pkt);
+		}
+	}
+}
+
+uint8_t *sr_new_arpreq_packet(const unsigned char *dest_MAC, 
+	const unsigned char *src_MAC, 
+	uint32_t dest_ip, 
+	uint32_t src_ip) 
+{
+	sr_arp_hdr_t *arp_hdr = 0;
+	sr_ethernet_hdr_t *ether_hdr = 0;
+	uint8_t *arp_packet = 0;
+	if ((arp_packet = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t))) == NULL) {
+		fprintf(stderr,"Error: out of memory (sr_newarp_packet)\n");
+        return;
+    }
+	arp_hdr = (sr_arp_hdr_t*)(arp_packet + sizeof(sr_ethernet_hdr_t));
+	arp_hdr->ar_hrd = htons(arp_hrd_ethernet);
+	arp_hdr->ar_pro = htons(ethertype_ip);
+	arp_hdr->ar_hln = htons(ETHER_ADDR_LEN);
+	arp_hdr->ar_pln = htons(4);
+	arp_hdr->ar_op = htons(arp_op_request);
+	arp_hdr->ar_sha = htons(src_MAC);
+	arp_hdr->ar_sip = htonl(src_ip);
+	arp_hdr->ar_tip = htonl(dest_ip);
+	arp_hdr->ar_tha = htons("00\x00\x00\x00\x00");
+	
+	ether_hdr = (sr_ethernet_hdr_t*)arp_packet;
+	ether_hdr->ether_dhost = htons("\xff\xff\xff\xff\xff\xff");
+	ether_hdr->ether_shost = htons(src_MAC);
+	ether_hdr->ether_type = htons(ethertype_arp);
+	
+	return arp_packet;
+}
 /* You should not need to touch the rest of this code. */
 
 /* Checks if an IP->MAC mapping is in the cache. IP is in network byte order.
