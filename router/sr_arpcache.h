@@ -138,6 +138,12 @@ void sr_arpreq_destroy(struct sr_arpcache *cache, struct sr_arpreq *entry);
 /* Prints out the ARP table. */
 void sr_arpcache_dump(struct sr_arpcache *cache);
 
+void sr_arpcache_sweepreqs(struct sr_instance *sr);
+void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req);
+uint8_t *sr_new_arpreq_packet(const unsigned char *dest_MAC, 
+	const unsigned char *src_MAC, 
+	uint32_t dest_ip, 
+	uint32_t src_ip);
 /* You shouldn't have to call these methods--they're already called in the
    starter code for you. The init call is a constructor, the destroy call is
    a destructor, and a cleanup thread times out cache entries every 15
@@ -146,5 +152,6 @@ void sr_arpcache_dump(struct sr_arpcache *cache);
 int   sr_arpcache_init(struct sr_arpcache *cache);
 int   sr_arpcache_destroy(struct sr_arpcache *cache);
 void *sr_arpcache_timeout(void *cache_ptr);
+
 
 #endif

@@ -80,7 +80,7 @@ uint8_t *sr_new_arpreq_packet(const unsigned char *dest_MAC,
 	sr_ethernet_hdr_t *ether_hdr = 0;
 	uint8_t *arp_packet = 0;
 	if ((arp_packet = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t))) == NULL) {
-		fprintf(stderr,"Error: out of memory (sr_newarp_packet)\n");
+		fprintf(stderr,"Error: out of memory (sr_new_arpreq_packet)\n");
         return;
     }
 	arp_hdr = (sr_arp_hdr_t*)(arp_packet + sizeof(sr_ethernet_hdr_t));
@@ -92,7 +92,7 @@ uint8_t *sr_new_arpreq_packet(const unsigned char *dest_MAC,
 	arp_hdr->ar_sha = htons(src_MAC);
 	arp_hdr->ar_sip = htonl(src_ip);
 	arp_hdr->ar_tip = htonl(dest_ip);
-	arp_hdr->ar_tha = htons("00\x00\x00\x00\x00");
+	arp_hdr->ar_tha = htons("\x00\x00\x00\x00\x00\x00");
 	
 	ether_hdr = (sr_ethernet_hdr_t*)arp_packet;
 	ether_hdr->ether_dhost = htons("\xff\xff\xff\xff\xff\xff");
