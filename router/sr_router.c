@@ -145,7 +145,7 @@ void sr_handlearp(struct sr_instance* sr,
 		}
 		
 		/* Insert the reply to our ARP cache and grab the list of packets waiting for this IP */
-		if ((arpreq = sr_arpcache_insert(&(sr->cache), ntohs(arp_hdr->ar_sha), arp_hdr->ar_sip)) != NULL) {
+		if ((arpreq = sr_arpcache_insert(&(sr->cache), arp_hdr->ar_sha, arp_hdr->ar_sip)) != NULL) {
 		
 			queuing_packet = arpreq->packets;
 			
@@ -154,7 +154,7 @@ void sr_handlearp(struct sr_instance* sr,
 			
 				/* fill in the MAC field */
 				queuing_ether = (sr_ethernet_hdr_t *)(queuing_packet->buf);
-				queuing_ether->ether_dhost = arp_hdr->ar_sha;
+				memcpy(queuing_ether->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
 				
 				/* send the queuing packet */
 				if (sr_send_packet(sr, queuing_packet->buf, queuing_packet->len, (const char*)queuing_packet->iface) == -1) {
@@ -204,7 +204,7 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 	/* Destination net unreachable (type 3, code 0) OR Time exceeded (type 11, code 0),
 	   since the two types use the exact same struct, except the next_mtu field which is unused for type 11 */
 	else if (type == 3 || type == 11) {
-	
+		sr_icmp_t3_hdr_t* icmp_hdr;
 		/* create new reply packet */
 		if ((reply_packet = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t))) == NULL) {
 			fprintf(stderr,"Error: out of memory (sr_generate_icmp)\n");
@@ -212,7 +212,7 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 		}
 		
 		/* construct ICMP header */
-		icmp_hdr = (sr_icmp_hdr_t *)(reply_packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
+		icmp_hdr = (sr_icmp_t3_hdr_t *)(reply_packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 		icmp_hdr->icmp_type = htons(type);
 		icmp_hdr->icmp_code = htons(code);
 		icmp_hdr->unused = htons(0);
@@ -241,8 +241,8 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 	ip_hdr->ip_len = htons(20 + icmp_size);						/* total length */
 	ip_hdr->ip_id = htons(0);									/* identification */
 	ip_hdr->ip_off = htons(IP_DF);								/* fragment offset field */
-	ip_hdr->ip_ttl = hotns(INIT_TTL);							/* time to live */
-	ip_hdr->ip_p = hotns(ip_protocol_icmp);						/* protocol */
+	ip_hdr->ip_ttl = htons(INIT_TTL);							/* time to live */
+	ip_hdr->ip_p = htons(ip_protocol_icmp);						/* protocol */
 	ip_hdr->ip_src = htonl(iface->ip);							/* source ip address */
 	ip_hdr->ip_dst = received_ip_hdr->ip_src;					/* dest ip address */
 	ip_hdr->ip_sum = htons(0);
@@ -250,8 +250,8 @@ uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
 	
 	/* construct ethernet header */
 	ether_hdr = (sr_ethernet_hdr_t*)reply_packet;
-	ether_hdr->ether_dhost = received_ether_hdr->ether_shost;
-	ether_hdr->ether_shost = htons(iface->addr);
+	memcpy(ether_hdr->ether_dhost, received_ether_hdr->ether_shost, ETHER_ADDR_LEN);
+	memcpy(ether_hdr->ether_shost, iface->addr, sizeof(iface->addr));
 	ether_hdr->ether_type = htons(ethertype_ip);
 			
 	return reply_packet;
@@ -270,8 +270,9 @@ void sr_handleip(struct sr_instance* sr,
 	struct sr_rt *rt = 0;
 	uint32_t nexthop_ip, longest_mask = 0;
 	struct sr_arpentry *arp_entry = 0;
-	struct sr_arpreq *arp_rep = 0;
+	struct sr_arpreq *arp_req = 0;
 	sr_ethernet_hdr_t *ether_hdr = 0;
+	int matched = 0;
 	
 	/* check if header has the correct size */
 	if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) {
@@ -385,13 +386,14 @@ void sr_handleip(struct sr_instance* sr,
 					rt->mask.s_addr > longest_mask) {
 					nexthop_ip = rt->gw.s_addr;
 					longest_mask = rt->mask.s_addr;
+					matched = 1;
 				}
 				
 				rt = rt->next;
 			}
 			
 			/* if a matching routing table entry was NOT found */
-			if (nexthop_ip == 0) {
+			if (matched == 0) {
 				
 				/* generate Destination net unreachable (type 3, code 0) reply packet */
 				if ((reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packet, ip_hdr, iface, 3, 0)) == 0) {
@@ -408,23 +410,27 @@ void sr_handleip(struct sr_instance* sr,
 			}
 			/* if a matching routing table entry was found */
 			else {
-			
+				/* if the next hop is 0.0.0.0 */
+				if(nexthop_ip == 0) {
+					nexthop_ip = ip_hdr->ip_dst;
+				}
+				
 				/* set the source MAC of ethernet header */
 				ether_hdr = (sr_ethernet_hdr_t*)packet;
-				ether_hdr->ether_shost = htons(iface->addr);
+				memcpy(ether_hdr->ether_shost, iface->addr, ETHER_ADDR_LEN);
 				
 				/* if the next-hop IP CANNOT be found in ARP cache */
 				if ((arp_entry = sr_arpcache_lookup(&(sr->cache), htonl(nexthop_ip))) == NULL) {
 					
 					/* send an ARP request */
-					arp_req = arpcache_queuereq(nexthop_ip, packet, len);
-					handle_arpreq(arp_req, sr);
+					arp_req = sr_arpcache_queuereq(&(sr->cache), nexthop_ip, packet, len, iface);
+					handle_arpreq(sr, arp_req);
 				}
 				/* if the next-hop IP can be found in ARP cache */
 				else {
 					
 					/* set the destination MAC of ethernet header */
-					ether_hdr->ether_dhost = htons(arp_entry->mac);
+					memcpy(ether_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
 					
 					/* send the packet */
 					if (sr_send_packet(sr, packet, sizeof(packet), (const char*)interface) == -1) {
@@ -472,6 +478,11 @@ void sr_handlepacket(struct sr_instance* sr,
   if (len < sizeof(sr_ethernet_hdr_t)) {
 	fprintf(stderr, "Error: invalid packet length (ether_hdr)\n");
 	return;
+  }
+  
+  if (len > 1500) {
+	  fprintf(stderr, "Error: packet length longer than MTU(ether_hdr)");
+	  return;
   }
   
   switch (ethertype(packet)) {
