@@ -13,7 +13,8 @@
 
 #include <stdio.h>
 #include <assert.h>
-
+#include <stdlib.h>
+#include <string.h>
 
 #include "sr_if.h"
 #include "sr_rt.h"
@@ -104,15 +105,15 @@ void sr_handlearp(struct sr_instance* sr,
 		arp_reply_hdr->ar_hln = htons(ETHER_ADDR_LEN);	            /* length of hardware address   */
 		arp_reply_hdr->ar_pln = htons(4);             				/* length of protocol address   */
 		arp_reply_hdr->ar_op = htons(arp_op_reply);             	/* ARP opcode (command)         */
-		arp_reply_hdr->ar_sha = htons(iface->addr);   				/* sender hardware address      */
+		memcpy(arp_reply_hdr->ar_sha, iface->addr, sizeof(iface->addr));   				/* sender hardware address      */
 		arp_reply_hdr->ar_sip = htonl(iface->ip);   				/* sender IP address            */
-		arp_reply_hdr->ar_tha = arp_hdr->arsha;   					/* target hardware address      */
-		arp_reply_hdr->ar_tip = arp_hdr->sip;        				/* target IP address            */
+		memcpy(arp_reply_hdr->ar_tha, arp_hdr->ar_sha, ETHER_ADDR_LEN);   					/* target hardware address      */
+		arp_reply_hdr->ar_tip = arp_hdr->ar_sip;        				/* target IP address            */
 		
 		/* construct ethernet header */
 		ether_hdr = (sr_ethernet_hdr_t*)reply_packet;
-		ether_hdr->ether_dhost = arp_hdr->arsha;
-		ether_hdr->ether_shost = htons(iface->addr);
+		memcpy(ether_hdr->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
+		memcpy(ether_hdr->ether_shost, iface->addr, sizeof(iface->addr));
 		ether_hdr->ether_type = htons(ethertype_arp);
 		
 		/* send the packet */
@@ -126,7 +127,7 @@ void sr_handlearp(struct sr_instance* sr,
 	else if (arp_hdr->ar_op == htons(arp_op_reply)) {
 	
 		/* check if the target ip matches ours */
-		if (arp_hdr->ar_tha != htons(iface->addr)) {
+		if (arp_hdr->ar_tha != iface->addr) {
 			fprintf(stderr, "Error: ARP reply does not match our MAC (sr_handlearp)\n");
 			return;
 		}
