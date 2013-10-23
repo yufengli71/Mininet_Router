@@ -1,10 +1,10 @@
 /*-----------------------------------------------------------------------------
- * File: sr_router.h
- * Date: ?
- * Authors: Guido Apenzeller, Martin Casado, Virkam V.
- * Contact: casado@stanford.edu
- *
- *---------------------------------------------------------------------------*/
+* File: sr_router.h
+* Date: ?
+* Authors: Guido Apenzeller, Martin Casado, Virkam V.
+* Contact: casado@stanford.edu
+*
+*---------------------------------------------------------------------------*/
 
 #ifndef SR_ROUTER_H
 #define SR_ROUTER_H
@@ -20,8 +20,8 @@
 #ifdef _DEBUG_
 #define Debug(x, args...) printf(x, ## args)
 #define DebugMAC(x) \
-  do { int ivyl; for(ivyl=0; ivyl<5; ivyl++) printf("%02x:", \
-  (unsigned char)(x[ivyl])); printf("%02x",(unsigned char)(x[5])); } while (0)
+do { int ivyl; for(ivyl=0; ivyl<5; ivyl++) printf("%02x:", \
+(unsigned char)(x[ivyl])); printf("%02x",(unsigned char)(x[5])); } while (0)
 #else
 #define Debug(x, args...) do{}while(0)
 #define DebugMAC(x) do{}while(0)
@@ -35,23 +35,23 @@ struct sr_if;
 struct sr_rt;
 
 /* ----------------------------------------------------------------------------
- * struct sr_instance
- *
- * Encapsulation of the state for a single virtual router.
- *
- * -------------------------------------------------------------------------- */
+* struct sr_instance
+*
+* Encapsulation of the state for a single virtual router.
+*
+* -------------------------------------------------------------------------- */
 
 struct sr_instance
 {
-    int  sockfd;   /* socket to server */
+    int sockfd; /* socket to server */
     char user[32]; /* user name */
-    char host[32]; /* host name */ 
+    char host[32]; /* host name */
     char template[30]; /* template name if any */
     unsigned short topo_id;
     struct sockaddr_in sr_addr; /* address to server */
     struct sr_if* if_list; /* list of interfaces */
     struct sr_rt* routing_table; /* routing table */
-    struct sr_arpcache cache;   /* ARP cache */
+    struct sr_arpcache cache; /* ARP cache */
     pthread_attr_t attr;
     FILE* logfile;
 };
@@ -67,6 +67,18 @@ int sr_read_from_server(struct sr_instance* );
 /* -- sr_router.c -- */
 void sr_init(struct sr_instance* );
 void sr_handlepacket(struct sr_instance* , uint8_t * , unsigned int , char* );
+void sr_handlearp(struct sr_instance* sr,
+        uint8_t * packet/* lent */,
+        unsigned int len,
+        char* interface/* lent */);
+uint8_t* sr_generate_icmp(sr_ethernet_hdr_t *received_ether_hdr,
+                                                 sr_ip_hdr_t *received_ip_hdr,
+                                                 struct sr_if *iface,
+                                                 uint8_t type, uint8_t code);
+void sr_handleip(struct sr_instance* sr,
+        uint8_t * packet/* lent */,
+        unsigned int len,
+        char* interface/* lent */);                                                
 
 /* -- sr_if.c -- */
 void sr_add_interface(struct sr_instance* , const char* );
