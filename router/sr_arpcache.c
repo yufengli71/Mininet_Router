@@ -26,21 +26,29 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
 	}
 }
 
+/*
+  This function handles whether to re-send or destroy ARP request.
+*/
+
 void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
 	time_t now = time(NULL);
 	if(difftime(now, req->sent) > 1.0) {
+		/* request timeout */
 		if(req->times_sent >= 5) {
 			
 			struct sr_packet *packets = req->packets;
 			
+			/* iterate through all packets on queue */
 			while(packets) {
 				uint8_t *reply_packet = 0;
 				sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(packets->buf+sizeof(sr_ethernet_hdr_t));
-				reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packets->buf, ip_hdr, sr_get_interface(sr, packets->iface), 3, 3);
+				reply_packet = sr_generate_icmp((sr_ethernet_hdr_t *)packets->buf, ip_hdr, sr_get_interface(sr, packets->iface), 3, 1); /* create ICMP type 3, code 1 (host unreachable) */
+				/* if ICMP packet fails to generate */
 				if(reply_packet == 0) {
 					fprintf(stderr, "Error: failed to generate ICMP packet\n");
 				}
 				
+				/* send ICMP packet to ip of packet in queue */
 				if(sr_send_packet(sr, reply_packet, sizeof(reply_packet), packets->iface) == -1) {
 					fprintf(stderr, "Error: sending packet failed (handle_arpreq)");
 				}
@@ -53,15 +61,20 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
 			/* generate ARP packet */
 			struct sr_if *iface = 0;
 			
+			/* if interface is not found */
 			if((iface = sr_get_interface(sr, req->packets->iface)) == 0) {
 				fprintf(stderr, "Error: interface does not exist (handle_arpreq)");
 				return;
 			}
 			
-			uint8_t *arp_pkt = sr_new_arpreq_packet(NULL, iface->addr, req->ip, iface->ip);
+			uint8_t *arp_pkt = sr_new_arpreq_packet(NULL, iface->addr, req->ip, iface->ip); /* create ARP request packet to re-send */
+
+			/* send ARP request packet */
 			if (sr_send_packet(sr, arp_pkt, sizeof(arp_pkt), (const char*)iface)==-1) {
 				fprintf(stderr, "Error: sending packet failed.");
 			}
+
+			/* update arpreq fields */
 			req->times_sent++;
 			req->sent = now;
 			
@@ -70,34 +83,37 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
 	}
 }
 
+/*
+  This function creates a new ARP request packet with the given parameters.
+*/
 uint8_t *sr_new_arpreq_packet(const unsigned char *dest_MAC, 
 	const unsigned char *src_MAC, 
 	uint32_t dest_ip, 
 	uint32_t src_ip) 
 {
-	sr_arp_hdr_t *arp_hdr = 0;
-	sr_ethernet_hdr_t *ether_hdr = 0;
-	uint8_t *arp_packet = 0;
-	uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+	sr_arp_hdr_t *arp_hdr = 0; /* ARP header */
+	sr_ethernet_hdr_t *ether_hdr = 0; /* Ether header */
+	uint8_t *arp_packet = 0; /* ARP request packet */
+	uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}; /* broadcast address ff:ff:ff:ff:ff:ff */
 	if ((arp_packet = malloc(sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t))) == NULL) {
 		fprintf(stderr,"Error: out of memory (sr_new_arpreq_packet)\n");
         return 0;
     }
 	arp_hdr = (sr_arp_hdr_t*)(arp_packet + sizeof(sr_ethernet_hdr_t));
-	arp_hdr->ar_hrd = htons(arp_hrd_ethernet);
-	arp_hdr->ar_pro = htons(ethertype_ip);
-	arp_hdr->ar_hln = htons(ETHER_ADDR_LEN);
-	arp_hdr->ar_pln = htons(4);
-	arp_hdr->ar_op = htons(arp_op_request);
-	memcpy(arp_hdr->ar_sha, src_MAC, ETHER_ADDR_LEN);
-	arp_hdr->ar_sip = htonl(src_ip);
-	arp_hdr->ar_tip = htonl(dest_ip);
-	bzero(arp_hdr->ar_tha, ETHER_ADDR_LEN);
+	arp_hdr->ar_hrd = htons(arp_hrd_ethernet); /* hardware address format */
+	arp_hdr->ar_pro = htons(ethertype_ip); /* format of protocol address */
+	arp_hdr->ar_hln = ETHER_ADDR_LEN; /* header length */
+	arp_hdr->ar_pln = 4; /* length of protocol address */
+	arp_hdr->ar_op = htons(arp_op_request); /* ARP opcode request */
+	memcpy(arp_hdr->ar_sha, src_MAC, ETHER_ADDR_LEN); /* source hardware address */
+	arp_hdr->ar_sip = src_ip; /* source ip */
+	arp_hdr->ar_tip = dest_ip; /* destination ip */
+	bzero(arp_hdr->ar_tha, ETHER_ADDR_LEN); /* target hardware address, zero fill */
 	
-	ether_hdr = (sr_ethernet_hdr_t*)arp_packet;
-	memcpy(ether_hdr->ether_dhost, broadcast, ETHER_ADDR_LEN);
-	memcpy(ether_hdr->ether_shost, src_MAC, ETHER_ADDR_LEN);
-	ether_hdr->ether_type = htons(ethertype_arp);
+	ether_hdr = (sr_ethernet_hdr_t*)arp_packet; /* cast as ethernet header */
+	memcpy(ether_hdr->ether_dhost, broadcast, ETHER_ADDR_LEN); /* destination host */
+	memcpy(ether_hdr->ether_shost, src_MAC, ETHER_ADDR_LEN); /* source host */
+	ether_hdr->ether_type = htons(ethertype_arp); /* format of protocol address */
 	
 	return arp_packet;
 }
