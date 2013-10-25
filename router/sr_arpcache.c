@@ -48,8 +48,9 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req) {
 					fprintf(stderr, "Error: failed to generate ICMP packet\n");
 				}
 				
+				
 				/* send ICMP packet to ip of packet in queue */
-				if(sr_send_packet(sr, reply_packet, sizeof(reply_packet), packets->iface) == -1) {
+				if(sr_send_packet(sr, reply_packet, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t), packets->iface) == -1) {
 					fprintf(stderr, "Error: sending packet failed (handle_arpreq)");
 				}
 				packets = packets->next;
