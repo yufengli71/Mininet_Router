@@ -24,6 +24,9 @@ int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
   /* CAREFUL MODIFYING CODE ABOVE THIS LINE! */
 
   nat->mappings = NULL;
+  nat->qtimeout = 0;
+  nat->est_it = 0;
+  nat->tr_it = 0;
   /* Initialize any variables here */
 
   return success;
@@ -61,23 +64,54 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
     time_t curtime = time(NULL);
 
     /* handle periodic tasks here */
-	struct sr_nat_mapping *mappings, *nxt, *prev;
+	struct sr_nat_mapping *mappings, *nxt_map, *prev;
 	
 	/* iterate through mappings table and free mappings which have not been
 	 * updated within the timeout specified. */
-	for (mappings = nat->mappings; mappings; mappings=nxt) {
-		nxt = mappings->next;
-		if (curtime - mappings->last_updated > TIMEOUT) {
-			if (prev != NULL) {
-				prev->next = nxt;
-				mappings->next = NULL;			
-			} 
-			mappings->next = NULL;
-			free(mappings->conns);
-			free(mappings);
-		}
+	for (mappings = nat->mappings; mappings; mappings=nxt_map) {
+		nxt_map = mappings->next;
+		if (mappings->type == nat_mapping_icmp) {
+			if (curtime - mappings->last_updated > nat->qtimeout) {
+				if (prev != NULL) {
+					prev->next = nxt_map;		
+				} 
+				mappings->next = NULL;
+				/* free(mappings->conns);*/
+				free(mappings);
+			}
+		} else if (mappings->type == nat_mapping_tcp) {
+			struct sr_nat_connection *conn, *nxt_conn, *prev;
+			for (conn = mappings->conns; conn; conn=nxt_conn) {
+				nxt_conn = conn->next;
+				time_t diff = curtime - conn->last_active;
+				if (conn->status == nat_conn_established) {
+					if (diff > nat->est_it) {
+						if (prev != NULL) {
+							prev->next = nxt_conn;							
+						}
+						conn->next = NULL;
+						free(conn);
+					} 
+				} else if (conn->status == nat_conn_transitory) {
+					if (diff > nat->tr_it) {
+						if (prev != NULL) {
+							prev->next = nxt_conn;							
+						}
+						conn->next = NULL;
+						free(conn);
+					}
+				}
+			}
+			if (mappings->conns == NULL) {
+				if (prev != NULL) {
+					prev->next = nxt_map;		
+				}
+				mappings->next = NULL;
+				free(mappings);
+			}
+		}		
 		
-		mappings = nxt;
+		mappings = nxt_map;
 	}
     pthread_mutex_unlock(&(nat->lock));
   }

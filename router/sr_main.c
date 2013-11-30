@@ -44,6 +44,9 @@ extern char* optarg;
 #define DEFAULT_SERVER "localhost"
 #define DEFAULT_RTABLE "rtable"
 #define DEFAULT_TOPO 0
+#define DEFAULT_QUERY_TIMEOUT 60
+#define DEFAULT_EST_IDLE_TIMEOUT 7440
+#define DEFAULT_TR_IDLE_TIMEOUT 300
 
 static void usage(char* );
 static void sr_init_instance(struct sr_instance* );
@@ -66,10 +69,14 @@ int main(int argc, char **argv)
     unsigned int topo = DEFAULT_TOPO;
     char *logfile = 0;
     struct sr_instance sr;
-
+    struct sr_nat nat;
+	int nat_on = 0;
+	int qtimeout = DEFAULT_QUERY_TIMEOUT;
+	int est_it = DEFAULT_EST_IDLE_TIMEOUT;
+	int tr_it = DEFAULT_TR_IDLE_TIMEOUT;
     printf("Using %s\n", VERSION_INFO);
 
-    while ((c = getopt(argc, argv, "hs:v:p:u:t:r:l:T:")) != EOF)
+    while ((c = getopt(argc, argv, "hs:v:p:u:t:r:l:T:n:I:E:R")) != EOF)
     {
         switch (c)
         {
@@ -101,6 +108,15 @@ int main(int argc, char **argv)
             case 'T':
                 template = optarg;
                 break;
+            case 'n':
+				nat_on = 1;
+			case 'I':
+				qtimeout = atoi((char *) optarg);
+			case 'E':
+				est_it = atoi((char *) optarg);
+			case 'R':
+				tr_it = atoi((char *) optarg);
+				
         } /* switch */
     } /* -- while -- */
 
@@ -159,6 +175,16 @@ int main(int argc, char **argv)
     /* call router init (for arp subsystem etc.) */
     sr_init(&sr);
 
+	if (nat_on) {
+		sr_nat_init(&nat)		
+		if(!nat) {
+			fprintf(stderr, "Error:NAT init failed.(sr_main.c)\n");
+			return;
+		}
+		nat->qtimeout = qtimeout;
+		nat->est_it = est_it;
+		nat->tr_it = tr_it;
+	}
     /* -- whizbang main loop ;-) */
     while( sr_read_from_server(&sr) == 1);
 
@@ -178,7 +204,8 @@ static void usage(char* argv0)
     printf("Format: %s [-h] [-v host] [-s server] [-p port] \n",argv0);
     printf("           [-T template_name] [-u username] \n");
     printf("           [-t topo id] [-r routing table] \n");
-    printf("           [-l log file] \n");
+    printf("           [-l log file] [-n toggle NAT] [-I query timeout]\n");
+    printf("           [-E TCP established idle timeout] [-R TCP transitory idle timeout]\n");
     printf("   defaults server=%s port=%d host=%s  \n",
             DEFAULT_SERVER, DEFAULT_PORT, DEFAULT_HOST );
 } /* -- usage -- */

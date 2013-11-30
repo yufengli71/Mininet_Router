@@ -12,9 +12,24 @@ typedef enum {
   /* nat_mapping_udp, */
 } sr_nat_mapping_type;
 
+typedef enum {
+  nat_conn_established,
+  nat_conn_transitory
+} sr_nat_conn_status_type;
+
+typedef enum {
+  nat_conn_syn_client,
+  nat_conn_syn_server,
+  nat_conn_syn_both
+} sr_nat_conn_handshake;
+
 struct sr_nat_connection {
   /* add TCP connection state data members here */
-
+  sr_nat_conn_status_type status;
+  sr_nat_conn_handshake handshake;
+  uint32_t host_ip;
+  uint16_t host_port;
+  time_t last_active;
   struct sr_nat_connection *next;
 };
 
@@ -32,7 +47,10 @@ struct sr_nat_mapping {
 struct sr_nat {
   /* add any fields here */
   struct sr_nat_mapping *mappings;
-
+  int qtimeout; /* ICMP query timeout interval */
+  int est_it; /* TCP Established Idle Timeout */
+  int tr_it; /* TCP Transitory Idle Timeout */
+  
   /* threading */
   pthread_mutex_t lock;
   pthread_mutexattr_t attr;
