@@ -6,6 +6,8 @@
 #include <time.h>
 #include <pthread.h>
 
+#define NUM_PORTS 1024
+
 typedef enum {
   nat_mapping_icmp,
   nat_mapping_tcp
@@ -51,6 +53,7 @@ struct sr_nat {
   int est_it; /* TCP Established Idle Timeout */
   int tr_it; /* TCP Transitory Idle Timeout */
   
+  uint16_t[] ports_used;
   /* threading */
   pthread_mutex_t lock;
   pthread_mutexattr_t attr;

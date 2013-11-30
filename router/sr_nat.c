@@ -4,6 +4,10 @@
 #include "sr_nat.h"
 #include <unistd.h>
 
+#include "sr_if.h"
+#include "sr_protocol.h"
+
+
 int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
   assert(nat);
@@ -27,6 +31,7 @@ int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
   nat->qtimeout = 0;
   nat->est_it = 0;
   nat->tr_it = 0;
+  nat->ports_used = uint16_t[NUM_PORTS];
   /* Initialize any variables here */
 
   return success;
@@ -39,15 +44,17 @@ int sr_nat_destroy(struct sr_nat *nat) {  /* Destroys the nat (free memory) */
 
   /* free nat memory here */
   struct sr_nat_mapping *mappings, *nxt;
+  struct sr_nat_connection *conn, *nxt_conn;
   for(mappings = nat->mappings; mappings; mappings = nxt) {
 	  nxt = mappings->next;
 	  /*mappings->next = NULL;*/
-	  if(mappings->conns) {
-		  free(mappings->conns);
+	  for(conn = mappings->conns; conn; conn=nxt_conn) {
+		  nxt_conn = conn->next;
+		  free(conn);
 	  }
 	  free(mappings);
   }
-  
+ 
   pthread_kill(nat->thread, SIGKILL);
   return pthread_mutex_destroy(&(nat->lock)) &&
     pthread_mutexattr_destroy(&(nat->attr));
@@ -65,6 +72,7 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
     /* handle periodic tasks here */
 	struct sr_nat_mapping *mappings, *nxt_map, *prev;
 	
+	/* give one second for most recent insert before checking for timeout */
 	if (difftime(curtime, nat->mappings->last_updated) <= 1.0) {
 		break;
 	}
@@ -79,10 +87,12 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
 				} 
 				mappings->next = NULL;
 				/* free(mappings->conns);*/
+				nat->ports_used[mappings->aux_ext] = 0;
 				free(mappings);
 			}
 		} else if (mappings->type == nat_mapping_tcp) {
 			struct sr_nat_connection *conn, *nxt_conn, *prev;
+			/* iterate through the connections and remove those that timed out */
 			for (conn = mappings->conns; conn; conn=nxt_conn) {
 				nxt_conn = conn->next;
 				time_t diff = difftime(curtime, conn->last_active);
@@ -104,11 +114,13 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
 					}
 				}
 			}
+			/* If mapping has no active connections left, remove mapping */
 			if (mappings->conns == NULL) {
 				if (prev != NULL) {
 					prev->next = nxt_map;		
 				}
 				mappings->next = NULL;
+				nat->ports_used[mappings->aux_ext] = 0;
 				free(mappings);
 			}
 		}		
@@ -164,8 +176,21 @@ struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   mapping->last_updated = time(NULL);
   mapping->conns = NULL;
   
-
-  mapping->next = nat->mappings;
+  /* find free port to assign mapping to 1024-2047 */
+  uint16_t nxt_prt = 0;
+  for(nxt_prt; nxt_prt < NUM_PORTS; nxt_prt++) {
+	  if (nat->ports_used[nxt_prt] == 0) {
+		  break;
+	  }
+  } 
+  mapping->aux_ext = 1024+nxt_prt;
+  nat->ports_used[nxt_prt] == 1;
+  
+  /* get ext_ip */
+  struct sr_if *ext_iface = sr_get_interface(nat->sr, nat->out_if_name);  
+  mapping->ip_ext = ext_iface->ip;
+  
+  mapping->next = nat->mappings; /* add to front of table */
   pthread_mutex_unlock(&(nat->lock));
   
   struct sr_nat_mapping *copy = malloc(sizeof(struct sr_nat_mapping));
