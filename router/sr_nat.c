@@ -48,7 +48,6 @@ int sr_nat_destroy(struct sr_nat *nat) {  /* Destroys the nat (free memory) */
 	  free(mappings);
   }
   
-  free(nat);
   pthread_kill(nat->thread, SIGKILL);
   return pthread_mutex_destroy(&(nat->lock)) &&
     pthread_mutexattr_destroy(&(nat->attr));
@@ -66,12 +65,15 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
     /* handle periodic tasks here */
 	struct sr_nat_mapping *mappings, *nxt_map, *prev;
 	
+	if (difftime(curtime, nat->mappings->last_updated) <= 1.0) {
+		break;
+	}
 	/* iterate through mappings table and free mappings which have not been
 	 * updated within the timeout specified. */
 	for (mappings = nat->mappings; mappings; mappings=nxt_map) {
 		nxt_map = mappings->next;
 		if (mappings->type == nat_mapping_icmp) {
-			if (curtime - mappings->last_updated > nat->qtimeout) {
+			if (difftime(curtime,  mappings->last_updated) > nat->qtimeout) {
 				if (prev != NULL) {
 					prev->next = nxt_map;		
 				} 
@@ -83,7 +85,7 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
 			struct sr_nat_connection *conn, *nxt_conn, *prev;
 			for (conn = mappings->conns; conn; conn=nxt_conn) {
 				nxt_conn = conn->next;
-				time_t diff = curtime - conn->last_active;
+				time_t diff = difftime(curtime, conn->last_active);
 				if (conn->status == nat_conn_established) {
 					if (diff > nat->est_it) {
 						if (prev != NULL) {
@@ -161,16 +163,12 @@ struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   mapping->type = type;
   mapping->last_updated = time(NULL);
   mapping->conns = NULL;
-  struct sr_nat_mapping *cur = nat->mappings;
   
-  /* find last mapping entry */
-  while(cur) {
-	  if (cur->next) {
-		  cur = cur->next;
-	  }
-  }
-  /* add new mapping to end of table */
-  cur->next = mapping;
+
+  mapping->next = nat->mappings;
   pthread_mutex_unlock(&(nat->lock));
-  return mapping;
+  
+  struct sr_nat_mapping *copy = malloc(sizeof(struct sr_nat_mapping));
+  memcpy(copy, mapping, sizeof(struct sr_nat_mapping));
+  return copy;
 }
